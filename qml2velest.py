@@ -894,13 +894,14 @@ for ev in cat:
     #(3i2.2,1x,2i2.2,1x,f5.2,1x,f7.4,a1,1x,f8.4,a1,f7.2,f7.2,i2...)
     #year,month,iday,ihr,min,sec,xlat,cns,xlon,cew,depth,emag,ifx...
     for v in eo['data']["event"]["hypocenters"]:
-        cns = "N" if v['lat'] >= 0.0 else "S"
-        cew = "E" if v['lon'] >= 0.0 else "W"
         ot = UTCDateTime(v['ot'])
+        cns = "N" if v['lat'] >= 0.0 else "S"
+        evlon = (360.0 - float(v['lon'])) if float(v['lon']) >= 0 else float(v['lon'])
+        evlat = float(v['lat'])
+        evdep = float(v['depth'])/1000.
+        cew = "W"
         mag=float(v['magnitudes'][0]['mag'])
-        velest_location="%2i%2i%2i %2.2i%2.2i %5.2f %7.4fN %8.4fW%7.2f%7.2f" % (int(str(ot.year)[2:4]),ot.month,ot.day,ot.hour,ot.minute,float(ot.second),float(v['lat']),float(v['lon']),float(v['depth'])/1000.,mag)
+        velest_location="%2i%2i%2i %2.2i%2.2i %5.2f %7.4fN %8.4fW%7.2f%7.2f" % (int(str(ot.year)[2:4]),ot.month,ot.day,ot.hour,ot.minute,float(ot.second)+float(ot.microsecond)/1000000.,evlat,evlon,evdep,mag)
         print(velest_location)
         velest_phases=to_velest(ot,pick_P,pick_S,amps,eid,or_id_to_write,version_name)
-        for item in out_print:
-            print(item)
 sys.exit(0)
