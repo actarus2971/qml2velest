@@ -35,6 +35,7 @@ try:
     from obspy.core.event import read_events
 except:
     from obspy.core.event import readEvents as read_events
+import pandas
 
 class MyParser(argparse.ArgumentParser):
     def error(self, message):
@@ -50,6 +51,8 @@ def parseArguments():
         parser.add_argument('--conf', default='./ws_agency_route.conf', help="needed with --eventid\n agency webservices routes list type (default: %(default)s)")
         parser.add_argument('--agency', default='ingv', help="needed with --eventid\n agency to query for (see routes list in .conf file) type (default: %(default)s)")
         parser.add_argument('--times', default='at', help="at=seconds from the OT minute; tt=seconds from the OT")
+        parser.add_argument('--maxphs', default=180, help="Beyond this value it writes out a WARNING to the standard error")
+        parser.add_argument('--stations', help="Full path of file with two columns 'alias stacode' of selected stations")
         if len(sys.argv) <= 1:
             parser.print_help()
             sys.exit(1)
@@ -308,43 +311,45 @@ def set_format(a,p):
          pf="%3i"
     return af,pf
 
-def to_velest(ot,pP,pS,a,eid,oid,ver,tc):
+def to_velest(ot,pP,pS,a,eid,oid,ver,tc,stl):
     pslist=[]
     for k,v in pP.items():
         p_used=True if v[7] == '1' else False
         p_tim = UTCDateTime(v[6])
         if p_used:
-           wei=" " if v[5] == "null" or v[5] == "" else v[5]
-           if v[8] == "null" or v[8] == "":
-              com=" "
-              cha="---"
-           else:
-              com=v[8][2] if len(v[8]) == 3 else " "
-              cha=v[8]
-           if len(v[0]) == 3:
-              stacode = v[0].strip()+" "
-           elif len(v[0]) == 4:
-              stacode = v[0]
-           elif len(v[0]) == 5:
-              stacode = v[0][:4]
-           if tc == 'tt':
-              p_phase="%4s%1s%1i%6.2f" % (stacode,'P',int(wei),float(p_tim-ot))
-           elif tc == 'at':
-              p_phase="%4s%1s%1i%6.2f" % (stacode,'P',int(wei),float(p_tim-(ot-(ot.second+ot.microsecond/1000000.))))
-           pslist.append(p_phase)
+           stacode = v[0].strip()
            try:
-               s_used=True if pS[k][7] == '1' else False
+              alias = stl.query('stacode == @stacode')['alias'].item()
            except:
-               s_used=False
-               pass
-           if s_used:
-              s_tim = UTCDateTime(pS[k][6])
-              weis = " " if pS[k][5] == "null" or pS[k][5] == "" else pS[k][5]
+              alias = False
+           if alias:
+              stacode = alias+" " if len(alias) == 3 else alias
+              wei=" " if v[5] == "null" or v[5] == "" else v[5]
+              if v[8] == "null" or v[8] == "":
+                 com=" "
+                 cha="---"
+              else:
+                 com=v[8][2] if len(v[8]) == 3 else " "
+                 cha=v[8]
               if tc == 'tt':
-                 s_phase="%4s%1s%1i%6.2f" % (stacode,'S',int(wei),float(s_tim-ot))
+                 p_phase="%4s%1s%1i%6.2f" % (stacode,'P',int(wei),float(p_tim-ot))
               elif tc == 'at':
-                 s_phase="%4s%1s%1i%6.2f" % (stacode,'S',int(wei),float(s_tim-(ot-(ot.second+ot.microsecond/1000000.))))
-              pslist.append(s_phase)
+                 p_phase="%4s%1s%1i%6.2f" % (stacode,'P',int(wei),float(p_tim-(ot-(ot.second+ot.microsecond/1000000.))))
+              pslist.append(p_phase)
+              try:
+                  s_used=True if pS[k][7] == '1' else False
+              except:
+                  s_used=False
+                  pass
+              if s_used:
+                 s_tim = UTCDateTime(pS[k][6])
+                 weis = " " if pS[k][5] == "null" or pS[k][5] == "" else pS[k][5]
+                 if tc == 'tt':
+                    s_phase="%4s%1s%1i%6.2f" % (stacode,'S',int(wei),float(s_tim-ot))
+                 elif tc == 'at':
+                    s_phase="%4s%1s%1i%6.2f" % (stacode,'S',int(wei),float(s_tim-(ot-(ot.second+ot.microsecond/1000000.))))
+                 pslist.append(s_phase)
+    pslist_lenght = len(pslist)
     no = 0
     nn = 0
     ol = ''
@@ -356,7 +361,7 @@ def to_velest(ot,pP,pS,a,eid,oid,ver,tc):
            #print('Newline')
            no = 0
            ol = ol + '\n'
-    print(ol)
+    return ol,pslist_lenght
 
 def to_hypoinverse(pP,pS,a,eid,oid,ver):
     # https://pubs.usgs.gov/of/2002/0171/pdf/of02-171.pdf (page 30-31)
@@ -492,6 +497,11 @@ self_software=sys.argv[0]
 if args.qmlin:
    qml_ans=args.qmlin
    url_to_description = "File converted from qml file " + args.qmlin.split(os.sep)[-1]
+
+if args.stations:
+    stalist=pandas.read_csv(args.stations,sep=' ',names=['alias','stacode','lat','lon','ele'], header=None)
+
+maxphs = int(args.maxphs)
 
 # This is the version that will be retrieved from the qml
 orig_ver=args.version
@@ -909,6 +919,9 @@ for ev in cat:
         cew = "W"
         mag=float(v['magnitudes'][0]['mag'])
         velest_location="%2i%2i%2i %2.2i%2.2i %5.2f %7.4fN %8.4fW%7.2f%7.2f" % (int(str(ot.year)[2:4]),ot.month,ot.day,ot.hour,ot.minute,float(ot.second)+float(ot.microsecond)/1000000.,evlat,evlon,evdep,mag)
+        velest_phases,number_of_phases=to_velest(ot,pick_P,pick_S,amps,eid,or_id_to_write,version_name,t_calc,stalist)
         print(velest_location)
-        velest_phases=to_velest(ot,pick_P,pick_S,amps,eid,or_id_to_write,version_name,t_calc)
+        print(velest_phases)
+        if number_of_phases >= maxphs:
+           sys.stderr.write("Event "+str(eid)+": number of readings exceeded "+str(maxphs)+" -->"+str(number_of_phases)+". Reduce the number of re-compile Velest\n")
 sys.exit(0)
