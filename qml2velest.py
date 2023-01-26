@@ -53,6 +53,7 @@ def parseArguments():
         parser.add_argument('--times', default='at', help="at=seconds from the OT minute; tt=seconds from the OT")
         parser.add_argument('--maxphs', default=180, help="Beyond this value it writes out a WARNING to the standard error")
         parser.add_argument('--stations', help="Full path of file with two columns 'alias stacode' of selected stations")
+        parser.add_argument('--quality', help="selection by quality parameters: maxrms,maxgap,maxelat,maxelon,maxedep,minphs")
         if len(sys.argv) <= 1:
             parser.print_help()
             sys.exit(1)
@@ -363,135 +364,17 @@ def to_velest(ot,pP,pS,a,eid,oid,ver,tc,stl):
            ol = ol + '\n'
     return ol,pslist_lenght
 
-def to_hypoinverse(pP,pS,a,eid,oid,ver):
-    # https://pubs.usgs.gov/of/2002/0171/pdf/of02-171.pdf (page 30-31)
-    # ftp://ehzftp.wr.usgs.gov/klein/hyp1.41/hyp1.41-release-notes.pdf (updated 2015)
-    # The output format described in the above pdf is the classical hypo71 phase file implemented in hypoinverse with additional information
-    phs=[]
-    for k,v in pP.items():
-        hi_line = "x" * 110
-        p_used=True if v[7] == '1' else False
-        p_tim = UTCDateTime(v[6])
-        if p_used:
-           pol=" " if v[4] == "null" or v[4] == "" else v[4]
-           wei=" " if v[5] == "null" or v[5] == "" else v[5]
-           if v[8] == "null" or v[8] == "":
-              com=" "
-              cha="---"
-           else:
-              com=v[8][2] if len(v[8]) == 3 else " "
-              cha=v[8]
-           Ptime="%2.2i%2.2i%2.2i%2.2i%2.2i%05.2f" % (int(str(p_tim.year)[2:4]),p_tim.month,p_tim.day,p_tim.hour,p_tim.minute,(float(p_tim.second) + float(p_tim.microsecond)/1000000.))
-           if len(v[0]) == 4:
-              hi_line = v[0] + "x" + v[3] + pol + wei + com + Ptime + hi_line[24:]
-           elif len(v[0]) == 5:
-              hi_line = v[0][0:4] + "x" + v[3] +  pol + wei + com + Ptime + hi_line[24:77] + v[0][4] + hi_line[78:]
-           elif len(v[0]) == 3:
-              hi_line = v[0] + "xx" + v[3] + pol + wei + com + Ptime + hi_line[24:]
-           try:
-               s_used=True if pS[k][7] == '1' else False
-           except:
-               s_used=False
-               pass
-           if s_used:
-              s_tim = UTCDateTime(pS[k][6])
-              s_seconds = float((int(s_tim.minute)-int(p_tim.minute))*60.) + float((float(s_tim.second)+float(s_tim.microsecond)/1000000.))
-              fmt = "%05.2f" if s_seconds < 100 else "%05.1f" # if the S seconds are >= 100 the format is modified to keep alignment
-              weis = " " if pS[k][5] == "null" or pS[k][5] == "" else pS[k][5]
-              hi_line = hi_line[:31] + fmt % (s_seconds) + "x" + pS[k][3] + "x" + weis + hi_line[40:]
-           hi_line = hi_line[:78] + cha + v[1] + v[2] + hi_line[85:]
-           try:
-              ka_n=k + "_" + v[8][0:2] + "N"
-              ka_e=k + "_" + v[8][0:2] + "E"
-              # The QML INGV AML channel Amplitude is half of peak to peak while hypo71/hypoinverse/hypoellipse is peak-to-peak so ...
-              # here for clarity channel amp (here already in mm) is multiplied by 2 then the two channel peak-to-peak amps are summed 
-              # and the mean is caculated to be written in f3.0 from column 43
-              hi_amp= ((float(a[ka_n][4])*2 + float(a[ka_e][4])*2)/2) 
-              # first I used one of the two periods, float(a[ka_n][4]), now the mean ... is it correct?
-              hi_per= (float(a[ka_n][5]) + float(a[ka_e][5]))/2 
-              amp_present=True
-              fa,fp = set_format(hi_amp,hi_per)
-              hi_line = hi_line[:44] + fa % (hi_amp) + fp % (hi_per) + hi_line[50:]
-           except Exception as e:
-              amp_present=False
-              pass
-           idlen=len(str(eid))
-           oridlen=len(str(or_id))
-           verlen=len(str(ver))
-           hi_line=hi_line.replace('x',' ')
-           hi_line=hi_line[:89] + "EVID:" + str(eid) + ",ORID:" + str(oid) + ",V:" + str(ver)
-           # For information completeness, 
-           # both the peak-to-peak channel amplitudes are reported in free format at the end of the line
-           try: 
-               all_amps=[ v for k,v in a.items() if k.startswith(ka_n[:-3])]
-           except:
-               all_amps=[]
-           if len(all_amps) > 0:
-              for la in all_amps:
-                  hi_line=hi_line + "," + str(la[3]) + ":" + str(float(la[4])*2)
-              #hi_line=hi_line + ",AN:" + str(float(a[ka_n][4])*2) + ",AE:" + str(float(a[ka_e][4])*2)
-           
-           phs.append(hi_line)
-           #hi_file_out.write(hi_line)
-    if len(phs) != 0:
-       phs.append('') # Terminator line for free 1st trial location
-    return phs 
-    #hi_file_out.close() 
-#Start Fortran
-#Col. Len. Format Data
-#1 4 A4 4-letter station site code. Also see col 78.
-#5 2 A2 P remark such as "IP". If blank, any P time is ignored.
-#7 1 A1 P first motion such as U, D, +, -, C, D.
-#8 1 I1 Assigned P weight code.
-#9 1 A1 Optional 1-letter station component.
-#10 10 5I2 Year, month, day, hour and minute.
-#20 5 F5.2 Second of P arrival.
-#25 1 1X Presently unused.
-#26 6 6X Reserved remark field. This field is not copied to output files.
-#32 5 F5.2 Second of S arrival. The S time will be used if this field is nonblank.
-#37 2 A2, 1X S remark such as "ES".
-#40 1 I1 Assigned weight code for S.
-#41 1 A1, 3X Data source code. This is copied to the archive output.
-#45 3 F3.0 Peak-to-peak amplitude in mm on Develocorder viewer screen or paper record.
-#48 3 F3.2 Optional period in seconds of amplitude read on the seismogram. If blank, use the standard period from station file.
-#51 1 I1 Amplitude magnitude weight code. Same codes as P & S.
-#52 3 3X Amplitude magnitude remark (presently unused).
-#55 4 I4 Optional event sequence or ID number. This number may bereplaced by an ID number on the terminator line.
-#59 4 F4.1 Optional calibration factor to use for amplitude magnitudes. If blank, the standard cal factor from the station file is used.
-#63 3 A3 Optional event remark. Certain event remarks are translated into 1-letter codes to save in output.
-#66 5 F5.2 Clock correction to be added to both P and S times.
-#71 1 A1 Station seismogram remark. Unused except as a label on output.
-#72 4 F4.0 Coda duration in seconds.
-#76 1 I1 Duration magnitude weight code. Same codes as P & S.
-#77 1 1X Reserved.
-#78 1 A1 Optional 5th letter of station site code.
-#79 3 A3 Station component code.
-#82 2 A2 Station network code.
-#84-85 2 A2 2-letter station location code (component extension)
-
-    #print('#### Not Used Picks ############')
-    #for k,v in pick_P.items():
-    #    p_not_used=True if v[-1] == '0' else False
-    #    if p_not_used:
-    #       print(v)
-    #       try:
-    #           s_not_used=True if pick_S[k][-1] == '0' else False
-    #       except:
-    #           s_not_used=False
-    #           pass
-    #       if s_used:
-    #          print(pick_S[k])
-           #if s_used == '1':
-#    print(linea['PLONS_P_1'])
-#    if len(linea['PLONS_P_1'][0]) > 4:
-#       fase = str(linea['PLONS_P_1'][0][0:4])
-#    print(type(fase),fase)
-
 ################## MAIN ####################
 args=parseArguments()
 
 # Getting this code name
 self_software=sys.argv[0]
+
+if args.quality:
+   maxrms,maxgap,maxelat,maxelon,maxedep,minphs = map(float,args.quality.split(','))
+   quality_select=True
+else:
+   quality_select=False
 
 # If a qml input file is given, file_qml is the full or relative path_to_file
 if args.qmlin:
@@ -500,6 +383,9 @@ if args.qmlin:
 
 if args.stations:
     stalist=pandas.read_csv(args.stations,sep=' ',names=['alias','stacode','lat','lon','ele'], header=None)
+else:
+    print("Argument --stations is mandatory")
+    sys.exit()
 
 maxphs = int(args.maxphs)
 
@@ -710,6 +596,9 @@ for ev in cat:
            #oo[''] = origin['quality']['']
            #sys.exit()
     #    print(origin['creation_info']['version'])
+           if quality_select and (oo['rms'] > maxrms or oo['azim_gap'] > maxgap or oo['err_lat'] > maxelat or oo['err_lon'] > maxelon or oo['err_depth'] > maxedep):
+              sys.stderr.write("Event "+str(eid)+" skipped due to quality limits (rms,gap,elat,elon,edep)\n") 
+              sys.exit()
            P_count_all=0
            S_count_all=0
            P_count_use=0
@@ -833,6 +722,9 @@ for ev in cat:
            oo['nph_s'] = S_count_use
            oo['nph_tot'] = P_count_all+S_count_all
            oo['nph_fm'] = Pol_count
+           if quality_select and oo['nph'] < minphs:
+              sys.stderr.write("Event "+str(eid)+" skipped due to quality limits (nphs="+str(oo['nph'])+")\n") 
+              sys.exit()
            amps = {}
            for mag in evdict['magnitudes']:
                m_or_id=str(mag['origin_id']).split('=')[-1]
